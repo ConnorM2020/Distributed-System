@@ -43,24 +43,35 @@
             margin: 5px 0;
         }
 
-        .btn-create-node {
+        .btn-create-node, .btn-reset-nodes {
             display: block;
             margin: 15px auto;
             padding: 10px 20px;
             font-size: 1.2rem;
-            background-color: #007bff;
-            color: #fff;
             border: none;
             border-radius: 5px;
             cursor: pointer;
             text-align: center;
+            color: #fff;
         }
+
+        .btn-create-node {
+            background-color: #007bff;
+        }   
 
         .btn-create-node:hover {
             background-color: #0056b3;
         }
 
-        #create-node-form {
+        .btn-reset-nodes {
+            background-color: #ff4c4c;
+        }
+
+        .btn-reset-nodes:hover {
+            background-color: #cc0000;
+        }
+        
+        #create-node-form, #create-transaction-form {
             display: none;
             margin: 20px auto;
             max-width: 400px;
@@ -70,12 +81,7 @@
             background: white;
         }
 
-        #create-node-form h2 {
-            margin-bottom: 15px;
-            font-size: 1.5rem;
-        }
-
-        #close-form-btn {
+        #close-node-form-btn, #close-transaction-form-btn {
             display: inline-block;
             background: #e3342f;
             color: white;
@@ -86,7 +92,7 @@
             cursor: pointer;
         }
 
-        #close-form-btn:hover {
+        #close-node-form-btn:hover, #close-transaction-form-btn:hover {
             background-color: #c53030;
         }
 
@@ -110,21 +116,14 @@
             padding: 10px 20px;
             border-radius: 5px;
             cursor: pointer;
+            text-align: center;
         }
 
         .btn-transaction:hover {
             background-color: #0056b3;
         }
 
-        #create-transaction-form {
-            display: none;
-            margin-top: 20px;
-            padding: 20px;
-            max-width: 500px;
-            background-color: #fff;
-            border-radius: 8px;
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-        }
+        
     </style>
     <script>
         async function fetchNodes() {
@@ -137,14 +136,16 @@
                 const div = document.createElement('div');
                 div.className = 'node-card';
 
+                const balances = Object.entries(node.balances).map(([account, balance]) => `
+                    <p><strong>${account}:</strong> ${balance.toFixed(2)}</p>
+                `).join('');
+
                 div.innerHTML = `
                     <h2>${name}</h2>
                     <p><strong>Address:</strong> ${node.address}</p>
-                    <p><strong>Balance:</strong> ${node.balance.toFixed(2)}</p>
+                    <div>${balances}</div>
                     <button class="btn btn-transaction" onclick="showCreateTransactionForm('${name}')">Create Transaction</button>
-                    <button class="btn btn-remove" onclick="removeNode('${name}')">Remove Node</button>
-                `;
-
+                    <button class="btn btn-remove" onclick="removeNode('${name}')">Remove Node</button>`;
                 dashboard.appendChild(div);
             }
         }
@@ -179,6 +180,15 @@
                 alert('Error removing node.');
             }
         }
+        async function resetNodes() {
+            const response = await fetch('/reset_nodes', { method: 'POST' });
+            if (response.ok) {
+                alert('All nodes reset successfully!');
+                fetchNodes();
+            } else {
+                alert('Error resetting nodes.');
+            }
+        }
 
         function toggleCreateNodeForm(show) {
             const form = document.getElementById('create-node-form');
@@ -207,6 +217,11 @@
                 });
         }
 
+        function hideCreateTransactionForm() {
+            const form = document.getElementById('create-transaction-form');
+            form.style.display = 'none';
+        }
+
         async function createTransaction(event) {
             event.preventDefault();
 
@@ -224,6 +239,7 @@
                 alert('Transaction successful!');
                 document.getElementById('create-transaction-form').reset();
                 fetchNodes();
+                hideCreateTransactionForm();
             } else {
                 const error = await response.json();
                 alert(error.error);
@@ -240,9 +256,13 @@
 
     <div class="container mt-4">
         <button class="btn-create-node" onclick="toggleCreateNodeForm(true)">Create Node</button>
+        <button class="btn-reset-nodes" onclick="resetNodes()">Reset Nodes</button> 
+
+
+
 
         <form id="create-node-form" onsubmit="createNode(event)">
-            <button id="close-form-btn" type="button" onclick="toggleCreateNodeForm(false)">X</button>
+            <button id="close-node-form-btn" type="button" onclick="toggleCreateNodeForm(false)">X</button>
             <h2>Create Node</h2>
             <label for="node-nickname">Nickname:</label>
             <input type="text" id="node-nickname" class="form-control mb-3" name="nickname" required>
@@ -250,6 +270,7 @@
         </form>
 
         <form id="create-transaction-form" onsubmit="createTransaction(event)">
+            <button id="close-transaction-form-btn" type="button" onclick="hideCreateTransactionForm()">X</button>
             <h2>Create Transaction</h2>
             <p><strong>Sender:</strong> <span id="transaction-sender"></span></p>
             <label for="transaction-amount">Amount:</label>

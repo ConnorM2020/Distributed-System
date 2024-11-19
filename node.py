@@ -13,6 +13,7 @@ app.secret_key = "secret-key-for-flask"
 # Store all nodes
 nodes = {}
 global_transaction_index = {}  # Shared transaction index across the network
+global_balances = {}  # Global balances for multiple accounts
 UDP_PORT = 50000  # UDP port for communication
 
 # Helper: Generate a unique ID
@@ -28,6 +29,7 @@ class Transaction:
         self.amount = amount
         self.sender = sender
         self.receiver = receiver
+        self.timestamp = datetime.now().isoformat()  # Include timestamp for accurate ordering
 
     def to_dict(self):
         return {
@@ -35,7 +37,8 @@ class Transaction:
             "account_id": self.account_id,
             "amount": self.amount,
             "sender": self.sender,
-            "receiver": self.receiver
+            "receiver": self.receiver,
+            "timestamp": self.timestamp,
         }
 
 # Node class
@@ -44,10 +47,9 @@ class Node:
         self.nickname = nickname
         self.node_id = generate_unique_id(nickname)  # Unique node ID
         self.address = self.assign_random_port()
-        self.account_id = f"acc-{nickname}"
+        self.accounts = {f"Balance: ": 1000.0}  # Multiple accounts supported
         self.peers = []
         self.transactions = {}
-        self.balance = 1000.0
         self.running = True
         self.transaction_counter = 0
 
@@ -60,15 +62,16 @@ class Node:
         if txn.id in self.transactions:
             return False, "Transaction already processed."
 
-        if txn.sender == self.nickname:
-            if self.balance < txn.amount:
+        # Handle sender account
+        if txn.sender in self.accounts:
+            if self.accounts[txn.sender] < txn.amount:
                 return False, "Insufficient balance."
-            self.balance -= txn.amount
-            print(f"{txn.amount:.2f} deducted from {self.nickname}. Updated balance: {self.balance:.2f}")
+            self.accounts[txn.sender] -= txn.amount
 
-        if txn.receiver == self.nickname:
-            self.balance += txn.amount
-            print(f"{txn.amount:.2f} added to {self.nickname}. Updated balance: {self.balance:.2f}")
+        # Handle receiver account
+        if txn.receiver not in self.accounts:
+            self.accounts[txn.receiver] = 0.0
+        self.accounts[txn.receiver] += txn.amount
 
         self.transactions[txn.id] = txn
         global_transaction_index[txn.id] = txn.to_dict()
@@ -76,10 +79,6 @@ class Node:
 
     def broadcast_transaction(self, txn):
         message = json.dumps({"type": "transaction", "data": txn.to_dict()})
-        self.send_udp_message(message)
-
-    def broadcast_removal(self):
-        message = json.dumps({"type": "node_removal", "data": self.address})
         self.send_udp_message(message)
 
     def send_udp_message(self, message):
@@ -104,10 +103,6 @@ class Node:
                 txn_data = message["data"]
                 txn = Transaction(**txn_data)
                 self.process_transaction(txn)
-                
-            elif message["type"] == "node_removal":
-                removed_address = message["data"]
-                self.peers = [peer for peer in self.peers if peer != removed_address]
         except Exception as e:
             print(f"Error handling UDP message: {e}")
 
@@ -120,7 +115,7 @@ def serve_frontend():
 
 @app.route("/nodes", methods=["GET"])
 def get_nodes():
-    return jsonify({name: {"address": node.address, "balance": node.balance, "node_id": node.node_id} for name, node in nodes.items()})
+    return jsonify({name: {"address": node.address, "balances": node.accounts, "node_id": node.node_id} for name, node in nodes.items()})
 
 @app.route("/create_node", methods=["POST"])
 def create_node():
@@ -138,9 +133,13 @@ def create_node():
             existing_node.peers.append(new_node.address)
 
     threading.Thread(target=new_node.listen, daemon=True).start()
+
+    # Sync data to the new node
+    sync_data_to_new_node(new_node)
+
     return jsonify({"message": f"Node {nickname} created successfully.", "address": new_node.address}), 201
 
-@app.route('/remove_node/<nickname>', methods=['DELETE'])
+@app.route("/remove_node/<nickname>", methods=["DELETE"])
 def remove_node(nickname):
     node = nodes.pop(nickname, None)
     if not node:
@@ -155,6 +154,13 @@ def remove_node(nickname):
     return jsonify({"message": f"Node {nickname} removed successfully."}), 200
 
 
+@app.route("/reset_nodes", methods=["POST"])
+def reset_nodes():
+    global nodes
+    nodes.clear()
+    return jsonify({"message": "All nodes have been reset and balances are restored to 1000"}), 200
+
+
 @app.route("/create_transaction/<node_nickname>", methods=["POST"])
 def create_transaction(node_nickname):
     node = nodes.get(node_nickname)
@@ -164,17 +170,27 @@ def create_transaction(node_nickname):
     txn_id = f"txn-{node.transaction_counter}"
     node.transaction_counter += 1
 
-    account_id = node.account_id
-    amount = float(request.json.get("amount"))
+    sender = request.json.get("sender")
     receiver = request.json.get("receiver")
+    amount = float(request.json.get("amount"))
 
-    txn = Transaction(txn_id, account_id, amount, sender=node.nickname, receiver=receiver)
+    txn = Transaction(txn_id, sender, amount, sender=sender, receiver=receiver)
     success, message = node.process_transaction(txn)
     if not success:
         return jsonify({"error": message}), 400
 
     node.broadcast_transaction(txn)
     return jsonify({"message": message, "transaction_id": txn_id}), 201
+
+@app.route("/sync_data", methods=["GET"])
+def sync_data():
+    return jsonify({"transactions": global_transaction_index, "balances": global_balances})
+
+def sync_data_to_new_node(new_node):
+    """Send all existing transactions and balances to the new node."""
+    for txn_id, txn_data in global_transaction_index.items():
+        txn = Transaction(**txn_data)
+        new_node.process_transaction(txn)
 
 def signal_handler(sig, frame):
     for node in nodes.values():
